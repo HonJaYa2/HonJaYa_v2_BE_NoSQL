@@ -3,8 +3,9 @@
 import mongoose from 'mongoose';
 
 const MathchedUser = new mongoose.Schema({
-  userId: {type: String, required: true},
+  userId: {type: Number, required: true},
   matchedTime: {type: Number, required: true},
+  roomNum: {type: Number, required: true}
 })
 
 const idealType = new mongoose.Schema({

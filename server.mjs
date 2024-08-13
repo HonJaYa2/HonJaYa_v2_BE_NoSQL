@@ -9,26 +9,177 @@ import websocketify from "koa-websocket";
 import mongoose from "mongoose";
 // import fetch from "node-fetch";
 import axios from "axios";
-import { WebSocketServer } from 'ws';
-
+import { WebSocketServer } from "ws";
+import http from "http";
 import qs from "qs";
 import cors from "@koa/cors";
 import User from "./models/User.js";
 import MatchingPool from "./models/MatchingPool.js";
+import ChatMessage from "./models/ChatMessage.js";
+import ChattingRoom from "./models/ChattingRoom.js";
+import StompServer from "stomp-broker-js";
 
-const app = websocketify(new Koa());
+import { Server } from "socket.io";
+
+const app = new Koa();
 const router = new Router();
 
-app.use(cors());
-
-mongoose.connect("mongodb://localhost:27017/honjaya2", {
-
-});
-const db = mongoose.connection;
-db.on("error", console.error.bind(console, "MongoDB connection error:"));
+const corsOptions = {
+  origin: "http://localhost:3000",
+  credentials: true,
+};
 
 app.use(bodyParser());
+app.use(cors(corsOptions));
 app.use(router.routes()).use(router.allowedMethods());
+
+const port = 8080;
+const server = http.createServer(app.callback());
+
+const io = new Server(server, {
+  path: '/ws/socket.io',
+  cors: {
+    origin: "http://localhost:3000",
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+});
+// const stompServer = new StompServer({ server: wsServer });
+
+// wsServer.on("headers", (headers, request) => {
+//   headers.push("Access-Control-Allow-Origin: http://localhost:3000");
+//   headers.push("Access-Control-Allow-Credentials: true");
+// });
+
+// router.all('/ws/chat', async (ctx) => {
+//     if (ctx.ws) {
+//       ctx.ws.server.on('upgrade', function upgrade(request, socket, head) {
+//         socket.setNoDelay(true);
+//         socket.write('HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
+//                      'Upgrade: WebSocket\r\n' +
+//                      'Connection: Upgrade\r\n' +
+//                      `Sec-WebSocket-Accept: ${request.headers['sec-websocket-key']}\r\n` +
+//                      'Access-Control-Allow-Origin: http://localhost:3000\r\n' +
+//                      'Access-Control-Allow-Credentials: true\r\n' +
+//                      '\r\n');
+//         wsServer.handleUpgrade(request, socket, head, function done(ws) {
+//           wsServer.emit('connection', ws, request);
+//         });
+//       });
+//       ctx.respond = false;
+//     }
+//   });
+  
+
+// stompServer.subscribe("/topic/chat/send/:roomId", async (msg, header) => {
+//   const messageData = JSON.parse(msg);
+
+//   const newMessage = new ChatMessage({
+//     msg: messageData.msg,
+//     sender: messageData.sender,
+//     senderId: messageData.senderId,
+//     senderProfile: messageData.senderProfile,
+//     createAt: messageData.createAt,
+//   });
+
+//   try {
+//     const savedMessage = await newMessage.save();
+//     console.log("Message saved to database");
+
+//     const chattingRoom = await ChattingRoom.findOne({
+//       roomNum: messageData.roomNum,
+//     });
+
+//     if (chattingRoom) {
+//       chattingRoom.messages.push(savedMessage._id);
+//       await chattingRoom.save();
+//     } else {
+//       const newChattingRoom = new ChattingRoom({
+//         roomNum: messageData.roomNum,
+//         messages: [savedMessage._id],
+//       });
+//       await newChattingRoom.save();
+//     }
+
+//     stompServer.send(
+//       `/topic/chat/receive/${messageData.roomNum}`,
+//       {},
+//       JSON.stringify(savedMessage)
+//     );
+//   } catch (error) {
+//     console.error("Error saving message: ", error);
+//   }
+// });
+
+io.on("connection", (socket) => {
+  console.log("new user connected");
+
+  socket.on("joinRoom", (roomNum) => {
+    socket.join(roomNum);
+    console.log(`User joined room: ${roomNum}`);
+  });
+
+  socket.on("sendMessage", async (msg) => {
+    const messageData = JSON.parse(msg);
+    console.log(messageData)
+    const newMessage = new ChatMessage({
+      msg: messageData.msg,
+      sender: messageData.sender,
+      senderId: messageData.senderId,
+      senderProfile: messageData.senderProfile,
+      createAt: messageData.createAt,
+    });
+
+    try {
+      const savedMessage = await newMessage.save();
+      console.log("Message saved to database");
+
+      const chattingRoom = await ChattingRoom.findOne({
+        roomNum: messageData.roomNum,
+      });
+
+      if (chattingRoom) {
+        chattingRoom.messageHistory.push(savedMessage._id);
+        await chattingRoom.save();
+      } else {
+        const newChattingRoom = new ChattingRoom({
+          roomNum: messageData.roomNum,
+          messageHistory: [savedMessage._id],
+        });
+        await newChattingRoom.save();
+      }
+
+      io.to(messageData.roomNum).emit("receiveMessage", JSON.stringify(savedMessage));
+    } catch (error) {
+      console.error("Error saving message: ", error);
+    }
+  });
+
+  socket.on("disconnect", () => {
+    console.log("user disconnected");
+  });
+});
+
+//채팅 히스토리 로드 API
+router.get("/chat/:roomNum", async (ctx) => {
+  console.log();
+  const { roomNum } = ctx.params;
+  try {
+    const chattingRoom = await ChattingRoom.findOne({
+      roomNum: roomNum,
+    }).populate("messages");
+    if (chattingRoom) {
+      ctx.status = 200;
+      ctx.body = chattingRoom.messageHistory;
+    } else {
+      ctx.status = 404;
+      ctx.body = { error: "Chat room not found" };
+    }
+  } catch (e) {
+    ctx.status = 500;
+    ctx.body = { error: e.message };
+  }
+});
 
 const getToken = async (auth_code) => {
   try {
@@ -88,28 +239,29 @@ const getUserInfo = async (accessToken) => {
   }
 };
 
-
 router.post("/user/getInfo", async (ctx) => {
-    const { matchedUserId } = ctx.request.body;
-    console.log(matchedUserId);
-    if (!matchedUserId) {
-        ctx.status = 400;
-        ctx.body = { error: "유저 ID 값 필요" };
-        return;
-      }
-    try {
-        const user = await User.find({ userId: matchedUserId }, '-password -matchedUser');
+  const { matchedUserId } = ctx.request.body;
+  console.log(matchedUserId);
+  if (!matchedUserId) {
+    ctx.status = 400;
+    ctx.body = { error: "유저 ID 값 필요" };
+    return;
+  }
+  try {
+    const user = await User.find(
+      { userId: matchedUserId },
+      "-password -matchedUser"
+    );
 
-        console.log(user);
-        ctx.status = 200;
-        ctx.body = { matchedUser: user };
-    } catch (e) {
-        ctx.status = 500;
-        console.log("찾는 유저 없음")
-        ctx.body = { error: e.message };
-    }
-})
-
+    console.log(user);
+    ctx.status = 200;
+    ctx.body = { matchedUser: user };
+  } catch (e) {
+    ctx.status = 500;
+    console.log("찾는 유저 없음");
+    ctx.body = { error: e.message };
+  }
+});
 
 //토큰 받아오기 & 유저 정보 받아오기(분리?)
 router.post("/token", async (ctx) => {
@@ -133,6 +285,7 @@ router.post("/token", async (ctx) => {
         userName: userInfo.kakao_account.profile.nickname,
         profileImage: userInfo.kakao_account.profile.profile_image_url,
       });
+      console.log;
       await UserData.save();
       console.log("User saved:", UserData);
       ctx.status = 200;
@@ -221,23 +374,23 @@ router.post("/user/setInfo", async (ctx) => {
 //2-3-b. matchedUSer필드값이 10초가 지나도 변화없다면 실패 메시지 반환
 
 const findMatchingUserFromMale = async (requestUser) => {
-    console.log("here");
+  console.log("here");
   const idealType = requestUser.idealType;
   //첫번째 다큐먼트의 users 필드값을 가져온다
   const matchingPool = await MatchingPool.findOne({}).populate("users");
 
   if (!matchingPool || !matchingPool.users.length) {
-    console.log("no matching pool")
+    console.log("no matching pool");
     return null;
   }
-  console.log(matchingPool)
-  return matchingPool.users[0]
+  console.log(matchingPool);
+  return matchingPool.users[0];
   const extractedUsers = await User.aggregate([
     {
       $match: {
         _id: {
-          $in: matchingPool.users.map((user) =>
-            new mongoose.Types.ObjectId(user._id)
+          $in: matchingPool.users.map(
+            (user) => new mongoose.Types.ObjectId(user._id)
           ),
         },
         age: { $gte: idealType.minAge, $lte: idealType.maxAge },
@@ -253,7 +406,7 @@ const findMatchingUserFromMale = async (requestUser) => {
       },
     },
   ]);
-  console.log(extractedUsers)
+  console.log(extractedUsers);
   for (let user of extractedUsers) {
     const userIdealType = user.idealType;
     if (
@@ -336,15 +489,21 @@ router.post("/matching", async (ctx) => {
                   JSON.stringify({
                     type: "match",
                     matchedUserId: updatedUser.matchedUser[0].userId,
+                    roomNum: updatedUser.matchedUser[0].roomNum,
                   })
+                );
+                await MatchingPool.updateOne(
+                  {},
+                  { $pull: { users: user._id } }
                 );
                 ws.close();
               }
             }, 1000);
 
-            setTimeout(() => {
+            setTimeout(async () => {
               clearInterval(checkForMatchInterval);
               ws.send(JSON.stringify({ type: "timeout" }));
+              await MatchingPool.updateOne({}, { $pull: { users: user._id } });
               ws.close();
             }, 20000);
 
@@ -375,19 +534,39 @@ router.post("/matching", async (ctx) => {
                 const checkForMatch = setInterval(async () => {
                   const userWhoMatched = await findMatchingUserFromMale(user);
                   if (userWhoMatched) {
-                    if (!user.matchedUser.some((matched) => matched.userId === userWhoMatched.userId)) {
-                    user.matchedUser.unshift({
-                      userId: userWhoMatched.userId,
-                      matchedTime: Date.now(),
-                    });
-                    userWhoMatched.matchedUser.unshift({
-                      userId: user.userId,
-                      matchedTime: Date.now(),
-                    });
+                    if (
+                      !user.matchedUser.some(
+                        (matched) => matched.userId === userWhoMatched.userId
+                      )
+                    ) {
+                      // ChattingRoom에서 가장 큰 roomNum을 찾고, 새로운 roomNum을 할당
+                      const maxRoomNum = await ChattingRoom.findOne()
+                        .sort("-roomNum")
+                        .exec();
+                      const newRoomNum = maxRoomNum
+                        ? maxRoomNum.roomNum + 1
+                        : 1;
 
-                    await user.save();
-                    await userWhoMatched.save();
-                }
+                      user.matchedUser.unshift({
+                        userId: userWhoMatched.userId,
+                        matchedTime: Date.now(),
+                        roomNum: newRoomNum,
+                      });
+                      userWhoMatched.matchedUser.unshift({
+                        userId: user.userId,
+                        matchedTime: Date.now(),
+                        roomNum: newRoomNum,
+                      });
+
+                      const newChattingRoom = new ChattingRoom({
+                        roomNum: newRoomNum,
+                        messages: [],
+                      });
+                      await newChattingRoom.save();
+
+                      await user.save();
+                      await userWhoMatched.save();
+                    }
                     clearInterval(checkForMatch);
                     resolve(userWhoMatched);
                   }
@@ -407,6 +586,7 @@ router.post("/matching", async (ctx) => {
                 JSON.stringify({
                   type: "match",
                   matchedUserId: userWhoMatched.userId,
+                  roomNum: user.matchedUser[0].roomNum,
                 })
               );
             } else {
@@ -431,7 +611,11 @@ router.post("/matching", async (ctx) => {
   }
 });
 
-const port = 8080;
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
 });
+
+mongoose.connect("mongodb://localhost:27017/honjaya2", {});
+const db = mongoose.connection;
+db.on("error", console.error.bind(console, "MongoDB connection error:"));
+

@@ -12,6 +12,7 @@
   "license": "ISC",
   "dependencies": {
     "@koa/cors": "^5.0.0",
+    "http": "^0.0.1-security",
     "koa": "^2.15.3",
     "koa-bodyparser": "^4.4.1",
     "koa-router": "^12.0.1",
@@ -19,6 +20,10 @@
     "mongoose": "^8.5.1",
     "node-fetch": "^3.3.2",
     "qs": "^6.12.3",
+    "socket.io": "^4.7.5",
+    "sockjs": "^0.3.24",
+    "stomp-broker-js": "^1.3.0",
+    "stompjs": "^2.3.3",
     "ws": "^8.18.0"
   }
 }
